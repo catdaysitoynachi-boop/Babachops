@@ -1,87 +1,19 @@
-import "dotenv/config";
-import express from "express";
-import fs from "node:fs/promises";
-import path from "node:path";
-import {
+require("dotenv").config();
+
+const {
     Client,
     GatewayIntentBits,
     PermissionsBitField
-} from "discord.js";
-import Groq from "groq-sdk";
+} = require("discord.js");
 
-import {
-    cargarConfiguracion,
-    guardarConfiguracion
-} from "./githubStorage.js";
+const Groq = require("groq-sdk");
+const express = require("express");
+const fs = require("fs");
+const https = require("https");
 
-const requiredEnv = [
-    "DISCORD_TOKEN",
-    "GROQ_API_KEY",
-    "GITHUB_TOKEN",
-    "GITHUB_OWNER",
-    "GITHUB_REPO"
-];
-
-for (const variable of requiredEnv) {
-    if (!process.env[variable]) {
-        console.error(`Falta la variable de entorno: ${variable}`);
-        process.exit(1);
-    }
-}
-
-// =====================================================
-// CONFIGURACIÓN INTERNA DE BABA CHOPS
-// =====================================================
-
-const PORT = process.env.PORT || 10000;
-
-const CREATOR_DISCORD_NAME = "dogdaycatnapxdsmc";
-
-const LIMITE_MEMORIA = 10;
-
-const GITHUB_BRANCH =
-    process.env.GITHUB_BRANCH || "main";
-
-const GITHUB_FILE_PATH =
-    process.env.GITHUB_FILE_PATH || "babachops/config.json";
-
-const MODELO_GROQ = "openai/gpt-oss-20b";
-
-// =====================================================
-// PROMPT
-// =====================================================
-
-const promptPath = path.join(
-    process.cwd(),
-    "prompt.txt"
-);
-
-let SYSTEM_PROMPT = "";
-
-try {
-    SYSTEM_PROMPT = await fs.readFile(
-        promptPath,
-        "utf8"
-    );
-} catch (error) {
-    console.error(
-        "No se pudo cargar prompt.txt:",
-        error
-    );
-    process.exit(1);
-}
-
-// =====================================================
-// GROQ
-// =====================================================
-
-const groq = new Groq({
-    apiKey: process.env.GROQ_API_KEY
-});
-
-// =====================================================
-// DISCORD
-// =====================================================
+// ==========================================
+// CONFIGURACIÓN DE BABA CHOPS
+// ==========================================
 
 const client = new Client({
     intents: [
@@ -91,509 +23,605 @@ const client = new Client({
     ]
 });
 
-// =====================================================
-// SERVIDOR WEB PARA RENDER / UPTIMEROBOT
-// =====================================================
+const groq = new Groq({
+    apiKey: process.env.GROQ_API_KEY
+});
+
+const CREATOR = "dogdaycatnapxdsmc";
+
+const GITHUB_OWNER = "catdaysitoynachi-boop";
+const GITHUB_REPO = "Babachops";
+const GITHUB_FILE = "babachops_config.json";
+const GITHUB_BRANCH = "main";
+
+const MODEL = "openai/gpt-oss-20b";
+
+// ==========================================
+// PROMPT
+// ==========================================
+
+const prompt = fs.readFileSync(
+    "prompt.txt",
+    "utf8"
+);
+
+// ==========================================
+// DATOS
+// ==========================================
+
+let config = {
+    canales: {},
+    mutes: {}
+};
+
+let conversaciones = {};
+
+// ==========================================
+// GITHUB
+// ==========================================
+
+function githubRequest(method, path, data = null) {
+    return new Promise((resolve, reject) => {
+
+        const body = data
+            ? JSON.stringify(data)
+            : null;
+
+        const options = {
+            hostname: "api.github.com",
+            path: path,
+            method: method,
+
+            headers: {
+                "User-Agent": "Baba-Chops",
+                "Authorization":
+                    `Bearer ${process.env.GITHUB_TOKEN}`,
+                "Accept":
+                    "application/vnd.github+json"
+            }
+        };
+
+        if (body) {
+            options.headers["Content-Type"] =
+                "application/json";
+        }
+
+        const request = https.request(
+            options,
+            response => {
+
+                let result = "";
+
+                response.on(
+                    "data",
+                    chunk => result += chunk
+                );
+
+                response.on(
+                    "end",
+                    () => {
+
+                        let json;
+
+                        try {
+                            json = result
+                                ? JSON.parse(result)
+                                : {};
+                        } catch {
+                            json = {};
+                        }
+
+                        resolve({
+                            status: response.statusCode,
+                            data: json
+                        });
+                    }
+                );
+            }
+        );
+
+        request.on(
+            "error",
+            reject
+        );
+
+        if (body) {
+            request.write(body);
+        }
+
+        request.end();
+    });
+}
+
+async function cargarDatos() {
+
+    const result = await githubRequest(
+        "GET",
+        `/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_FILE}?ref=${GITHUB_BRANCH}`
+    );
+
+    if (result.status !== 200) {
+        console.log(
+            "No existe configuración guardada. Se usará una nueva."
+        );
+
+        return;
+    }
+
+    try {
+
+        const contenido = Buffer.from(
+            result.data.content.replace(/\n/g, ""),
+            "base64"
+        ).toString("utf8");
+
+        config = JSON.parse(contenido);
+
+        console.log(
+            "Configuración cargada desde GitHub."
+        );
+
+    } catch (error) {
+
+        console.error(
+            "Error leyendo configuración:",
+            error
+        );
+    }
+}
+
+async function guardarDatos() {
+
+    const path =
+        `/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_FILE}`;
+
+    const actual =
+        await githubRequest(
+            "GET",
+            `${path}?ref=${GITHUB_BRANCH}`
+        );
+
+    const contenido =
+        JSON.stringify(
+            config,
+            null,
+            2
+        );
+
+    const encoded =
+        Buffer.from(
+            contenido
+        ).toString("base64");
+
+    const datos = {
+        message: "Actualizar configuración de Baba Chops",
+        content: encoded,
+        branch: GITHUB_BRANCH
+    };
+
+    if (
+        actual.status === 200 &&
+        actual.data.sha
+    ) {
+        datos.sha = actual.data.sha;
+    }
+
+    const result =
+        await githubRequest(
+            "PUT",
+            path,
+            datos
+        );
+
+    if (
+        result.status === 200 ||
+        result.status === 201
+    ) {
+        console.log(
+            "Configuración guardada en GitHub."
+        );
+    } else {
+        console.error(
+            "Error guardando en GitHub:",
+            result.data
+        );
+    }
+}
+
+// ==========================================
+// EXPRESS / KEEP ALIVE
+// ==========================================
 
 const app = express();
 
 app.get("/", (req, res) => {
-    res.status(200).send("Baba Chops está funcionando.");
+    res.send("Baba Chops está funcionando.");
 });
 
 app.get("/health", (req, res) => {
-    res.status(200).json({
-        status: "ok",
-        bot: client.user
-            ? client.user.tag
-            : "iniciando"
-    });
+    res.status(200).send("OK");
 });
 
-app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Servidor web iniciado en el puerto ${PORT}`);
-});
-
-// =====================================================
-// CONFIGURACIÓN
-// =====================================================
-
-let configuracion = {
-    canalesPermitidos: {},
-    servidoresMuteados: {}
-};
-
-let configuracionModificada = false;
-
-const conversaciones = new Map();
-
-let guardando = false;
-
-async function cargarConfiguracionInicial() {
-    try {
-        const datos = await cargarConfiguracion();
-
-        if (datos) {
-            configuracion = {
-                canalesPermitidos:
-                    datos.canalesPermitidos || {},
-
-                servidoresMuteados:
-                    datos.servidoresMuteados || {}
-            };
-        }
-
-        console.log("Configuración cargada desde GitHub.");
-    } catch (error) {
-        console.error(
-            "No se pudo cargar la configuración:",
-            error
-        );
+app.listen(
+    process.env.PORT || 3000,
+    () => {
+        console.log("Servidor web iniciado.");
     }
-}
+);
 
-async function guardar() {
-    if (!configuracionModificada) {
-        return;
-    }
+// ==========================================
+// READY
+// ==========================================
 
-    if (guardando) {
-        return;
-    }
-
-    guardando = true;
-
-    try {
-        await guardarConfiguracion(
-            configuracion
-        );
-
-        configuracionModificada = false;
+client.once(
+    "ready",
+    () => {
 
         console.log(
-            "Configuración guardada en GitHub."
+            `Baba Chops conectado como ${client.user.tag}`
         );
-    } catch (error) {
-        console.error(
-            "Error guardando configuración:",
-            error
+
+        console.log(
+            `Servidores: ${client.guilds.cache.size}`
         );
-    } finally {
-        guardando = false;
     }
-}
+);
 
-// =====================================================
-// UTILIDADES
-// =====================================================
+// ==========================================
+// ENTRA A UN SERVIDOR
+// ==========================================
 
-function esCreador(message) {
-    return (
-        message.author.username.toLowerCase() ===
-        CREATOR_DISCORD_NAME.toLowerCase()
-    );
-}
+client.on(
+    "guildCreate",
+    async guild => {
 
-function esAdministrador(message) {
-    return message.member?.permissions.has(
-        PermissionsBitField.Flags.Administrator
-    );
-}
+        console.log(
+            `Baba Chops entró a ${guild.name}`
+        );
 
-function puedeAdministrar(message) {
-    return (
-        esCreador(message) ||
-        esAdministrador(message)
-    );
-}
+        const canal =
+            guild.channels.cache.find(
+                channel =>
+                    channel.isTextBased() &&
+                    channel
+                        .permissionsFor(guild.members.me)
+                        ?.has(
+                            PermissionsBitField.Flags.SendMessages
+                        )
+            );
 
-function servidorMuteado(guildId) {
-    return Boolean(
-        configuracion.servidoresMuteados[guildId]
-    );
-}
+        if (!canal) {
+            return;
+        }
 
-function canalPermitido(message) {
-    const guildId = message.guild.id;
+        try {
 
-    const canales =
-        configuracion.canalesPermitidos[guildId];
+            await canal.send(
+                "¡Hola! Soy Baba Chops.\n" +
+                "Hello! I'm Baba Chops.\n\n" +
+                "Usa `!babachops` para hablar conmigo."
+            );
 
-    // Si no hay canales configurados,
-    // Baba Chops puede responder normalmente.
-    if (!canales || canales.length === 0) {
-        return true;
+        } catch {}
     }
+);
 
-    return canales.includes(message.channel.id);
-}
+// ==========================================
+// MENSAJES
+// ==========================================
 
-function obtenerHistorial(guildId) {
-    if (!conversaciones.has(guildId)) {
-        conversaciones.set(guildId, []);
-    }
+client.on(
+    "messageCreate",
+    async message => {
 
-    return conversaciones.get(guildId);
-}
+        if (message.author.bot) return;
+        if (!message.guild) return;
 
-// =====================================================
-// READY
-// =====================================================
+        const texto =
+            message.content.trim();
 
-client.once("ready", () => {
-    console.log(
-        `Baba Chops conectado como ${client.user.tag}`
-    );
+        // ======================================
+        // !UNIRSE
+        // ======================================
 
-    console.log(
-        `Conectado a ${client.guilds.cache.size} servidor(es).`
-    );
-});
+        if (texto === "!unirse") {
 
-// =====================================================
-// CUANDO ENTRA A UN SERVIDOR
-// =====================================================
+            await message.reply(
+                "¡Ya estoy aquí! / I'm already here!"
+            );
 
-client.on("guildCreate", async (guild) => {
-    console.log(
-        `Baba Chops entró a: ${guild.name}`
-    );
+            return;
+        }
 
-    const mensajes = [
-        "¡Hola! Soy Baba Chops.",
-        "Hello! I'm Baba Chops.",
-        "",
-        "Usa !babachops para hablar conmigo.",
-        "Use !babachops to talk with me."
-    ];
+        // ======================================
+        // !MUTE
+        // ======================================
 
-    for (const canal of guild.channels.cache.values()) {
-        if (
-            canal.isTextBased() &&
-            canal.permissionsFor(guild.members.me)?.has(
-                PermissionsBitField.Flags.SendMessages
-            )
-        ) {
-            try {
-                await canal.send(mensajes.join("\n"));
-            } catch {
-                // Ignorar canales donde no pueda enviar
+        if (texto === "!mute") {
+
+            if (
+                !message.member.permissions.has(
+                    PermissionsBitField.Flags.Administrator
+                ) &&
+                message.author.username !== CREATOR
+            ) {
+                return;
             }
 
-            break;
-        }
-    }
-});
+            config.mutes[
+                message.guild.id
+            ] = true;
 
-// =====================================================
-// MENSAJES
-// =====================================================
+            await guardarDatos();
 
-client.on("messageCreate", async (message) => {
-    if (message.author.bot) {
-        return;
-    }
-
-    if (!message.guild) {
-        return;
-    }
-
-    const contenido = message.content.trim();
-
-    // =================================================
-    // !UNIRSE
-    // =================================================
-
-    if (contenido === "!unirse") {
-        await message.reply(
-            "¡Ya estoy aquí! / I'm already here!"
-        );
-
-        return;
-    }
-
-    // =================================================
-    // !MUTE
-    // =================================================
-
-    if (contenido === "!mute") {
-        if (!puedeAdministrar(message)) {
             await message.reply(
-                "No tienes permiso para usar este comando."
+                "Baba Chops ha sido silenciada."
             );
 
             return;
         }
 
-        const guildId = message.guild.id;
+        // ======================================
+        // !UNMUTE
+        // ======================================
 
-        configuracion.servidoresMuteados[guildId] = true;
+        if (texto === "!unmute") {
 
-        configuracionModificada = true;
+            if (
+                !message.member.permissions.has(
+                    PermissionsBitField.Flags.Administrator
+                ) &&
+                message.author.username !== CREATOR
+            ) {
+                return;
+            }
 
-        await guardar();
+            delete config.mutes[
+                message.guild.id
+            ];
 
-        await message.reply(
-            "Baba Chops ha sido silenciada en este servidor."
-        );
+            await guardarDatos();
 
-        return;
-    }
-
-    // =================================================
-    // !UNMUTE
-    // =================================================
-
-    if (contenido === "!unmute") {
-        if (!puedeAdministrar(message)) {
             await message.reply(
-                "No tienes permiso para usar este comando."
+                "Baba Chops vuelve a estar activa."
             );
 
             return;
         }
 
-        const guildId = message.guild.id;
+        // ======================================
+        // !CANAL
+        // ======================================
 
-        delete configuracion.servidoresMuteados[guildId];
+        if (
+            texto.startsWith("!canal")
+        ) {
 
-        configuracionModificada = true;
+            if (
+                !message.member.permissions.has(
+                    PermissionsBitField.Flags.Administrator
+                ) &&
+                message.author.username !== CREATOR
+            ) {
+                return;
+            }
 
-        await guardar();
+            const guild =
+                message.guild.id;
 
-        await message.reply(
-            "Baba Chops vuelve a estar activa."
-        );
+            const argumento =
+                texto
+                    .slice(6)
+                    .trim();
 
-        return;
-    }
+            if (
+                argumento.toLowerCase() ===
+                "reset"
+            ) {
 
-    // =================================================
-    // !CANAL
-    // =================================================
+                delete config.canales[guild];
 
-    if (contenido.startsWith("!canal")) {
-        if (!puedeAdministrar(message)) {
+                await guardarDatos();
+
+                await message.reply(
+                    "Canales reiniciados."
+                );
+
+                return;
+            }
+
+            const canales =
+                [...message.mentions.channels.values()];
+
+            if (!canales.length) {
+
+                await message.reply(
+                    "Usa `!canal #canal` o `!canal reset`."
+                );
+
+                return;
+            }
+
+            config.canales[guild] =
+                canales.map(
+                    canal => canal.id
+                );
+
+            await guardarDatos();
+
             await message.reply(
-                "No tienes permiso para usar este comando."
+                "Canales configurados."
             );
 
             return;
         }
 
-        const guildId = message.guild.id;
+        // ======================================
+        // !APAGAR
+        // ======================================
 
-        const argumentos =
-            contenido.slice("!canal".length).trim();
+        if (
+            texto === "!apagar"
+        ) {
 
-        // !canal reset
-        if (argumentos.toLowerCase() === "reset") {
-            delete configuracion.canalesPermitidos[guildId];
+            if (
+                message.author.username !==
+                CREATOR
+            ) {
+                return;
+            }
 
-            configuracionModificada = true;
-
-            await guardar();
+            await guardarDatos();
 
             await message.reply(
-                "Configuración de canales reiniciada."
+                "Apagando Baba Chops..."
+            );
+
+            process.exit(0);
+        }
+
+        // ======================================
+        // !BABACHOPS
+        // ======================================
+
+        if (
+            !texto
+                .toLowerCase()
+                .startsWith("!babachops")
+        ) {
+            return;
+        }
+
+        const guild =
+            message.guild.id;
+
+        // Mute
+        if (config.mutes[guild]) {
+            return;
+        }
+
+        // Canales
+        if (
+            config.canales[guild] &&
+            !config.canales[guild].includes(
+                message.channel.id
+            )
+        ) {
+            return;
+        }
+
+        const pregunta =
+            texto
+                .slice("!babachops".length)
+                .trim();
+
+        if (!pregunta) {
+
+            await message.reply(
+                "¿Qué quieres decirme?"
             );
 
             return;
         }
 
-        // Busca menciones de canales
-        const canalesMencionados =
-            [...message.mentions.channels.values()];
+        // ======================================
+        // MEMORIA
+        // ======================================
 
-        if (canalesMencionados.length === 0) {
-            await message.reply(
-                "Usa `!canal #canal` o `!canal reset`."
-            );
-
-            return;
+        if (!conversaciones[guild]) {
+            conversaciones[guild] = [];
         }
 
-        configuracion.canalesPermitidos[guildId] =
-            canalesMencionados.map(
-                canal => canal.id
-            );
-
-        configuracionModificada = true;
-
-        await guardar();
-
-        await message.reply(
-            `Baba Chops responderá en: ${canalesMencionados
-                .map(canal => `<#${canal.id}>`)
-                .join(", ")}`
-        );
-
-        return;
-    }
-
-    // =================================================
-    // !APAGAR
-    // =================================================
-
-    if (contenido === "!apagar") {
-        if (!esCreador(message)) {
-            await message.reply(
-                "No tienes permiso para apagarme."
-            );
-
-            return;
-        }
-
-        await message.reply(
-            "Apagando Baba Chops..."
-        );
-
-        await guardar();
-
-        process.exit(0);
-    }
-
-    // =================================================
-    // !BABACHOPS
-    // =================================================
-
-    if (!contenido.toLowerCase().startsWith("!babachops")) {
-        return;
-    }
-
-    if (servidorMuteado(message.guild.id)) {
-        return;
-    }
-
-    if (!canalPermitido(message)) {
-        return;
-    }
-
-    const texto = contenido
-        .slice("!babachops".length)
-        .trim();
-
-    if (!texto) {
-        await message.reply(
-            "¿Qué quieres decirme?"
-        );
-
-        return;
-    }
-
-    const guildId = message.guild.id;
-
-    const historial =
-        obtenerHistorial(guildId);
-
-    historial.push({
-        role: "user",
-        content: texto
-    });
-
-    // Mantener solamente los últimos 10 mensajes
-    while (
-        historial.length >
-        LIMITE_MEMORIA * 2
-    ) {
-        historial.shift();
-    }
-
-    try {
-        await message.channel.sendTyping();
-
-        const respuesta =
-            await groq.chat.completions.create({
-                model: MODELO_GROQ,
-
-                messages: [
-                    {
-                        role: "system",
-                        content: SYSTEM_PROMPT
-                    },
-                    ...historial
-                ]
-            });
-
-        const respuestaTexto =
-            respuesta.choices?.[0]?.message?.content;
-
-        if (!respuestaTexto) {
-            await message.reply(
-                "No pude generar una respuesta."
-            );
-
-            return;
-        }
-
-        historial.push({
-            role: "assistant",
-            content: respuestaTexto
+        conversaciones[guild].push({
+            role: "user",
+            content: pregunta
         });
 
         while (
-            historial.length >
-            LIMITE_MEMORIA * 2
+            conversaciones[guild].length > 20
         ) {
-            historial.shift();
+            conversaciones[guild].shift();
         }
 
-        await message.reply(
-            respuestaTexto
-        );
-    } catch (error) {
-        console.error(
-            "Error con Groq:",
-            error
-        );
+        // ======================================
+        // GROQ
+        // ======================================
 
-        await message.reply(
-            "Tuve un problema al intentar responder."
-        );
+        try {
+
+            await message.channel.sendTyping();
+
+            const respuesta =
+                await groq.chat.completions.create({
+                    model: MODEL,
+
+                    messages: [
+                        {
+                            role: "system",
+                            content: prompt
+                        },
+
+                        ...conversaciones[guild]
+                    ]
+                });
+
+            const resultado =
+                respuesta.choices?.[0]
+                    ?.message
+                    ?.content;
+
+            if (!resultado) {
+                return;
+            }
+
+            conversaciones[guild].push({
+                role: "assistant",
+                content: resultado
+            });
+
+            while (
+                conversaciones[guild].length > 20
+            ) {
+                conversaciones[guild].shift();
+            }
+
+            await message.reply(
+                resultado
+            );
+
+        } catch (error) {
+
+            console.error(
+                "Error de Groq:",
+                error
+            );
+
+            await message.reply(
+                "Tuve un problema al responder."
+            );
+        }
     }
-});
+);
 
-// =====================================================
+// ==========================================
 // GUARDADO AUTOMÁTICO
-// =====================================================
+// ==========================================
 
 setInterval(
-    guardar,
-    30_000
+    guardarDatos,
+    30000
 );
 
-// =====================================================
-// CIERRE SEGURO
-// =====================================================
+// ==========================================
+// INICIAR
+// ==========================================
 
-async function apagar() {
-    console.log(
-        "Guardando antes de apagar..."
+(async () => {
+
+    await cargarDatos();
+
+    client.login(
+        process.env.DISCORD_TOKEN
     );
 
-    await guardar();
-
-    client.destroy();
-
-    process.exit(0);
-}
-
-process.on(
-    "SIGTERM",
-    apagar
-);
-
-process.on(
-    "SIGINT",
-    apagar
-);
-
-// =====================================================
-// INICIO
-// =====================================================
-
-await cargarConfiguracionInicial();
-
-await client.login(
-    process.env.DISCORD_TOKEN
-);
+})();
