@@ -1,4 +1,7 @@
-require("dotenv").config();
+const fs = require("fs");
+const path = require("path");
+const https = require("https");
+const express = require("express");
 
 const {
     Client,
@@ -7,51 +10,52 @@ const {
 } = require("discord.js");
 
 const Groq = require("groq-sdk");
-const express = require("express");
-const fs = require("fs");
-const https = require("https");
 
-// ==========================================
-// VARIABLES DE RENDER
-// ==========================================
+// ======================================================
+// CONFIGURACIÓN
+// ======================================================
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 
-if (!DISCORD_TOKEN) {
-    console.error("Falta DISCORD_TOKEN.");
-    process.exit(1);
-}
-
-if (!GROQ_API_KEY) {
-    console.error("Falta GROQ_API_KEY.");
-    process.exit(1);
-}
-
-if (!GITHUB_TOKEN) {
-    console.error("Falta GITHUB_TOKEN.");
-    process.exit(1);
-}
-
-// ==========================================
-// CONFIGURACIÓN
-// ==========================================
-
-const PREFIJO = "b!";
-
-const CREATOR = "dogdaycatnapxdsmc";
-
+// GitHub
 const GITHUB_OWNER = "catdaysitoynachi-boop";
 const GITHUB_REPO = "Babachops";
 const GITHUB_FILE = "babachops_config.json";
 const GITHUB_BRANCH = "main";
 
-const MODEL = "openai/gpt-oss-20b";
+// Baba Chops
+const CREADOR = "dogdaycatnapxdsmc";
+const MODELO = "openai/gpt-oss-20b";
+const PREFIJO = "b!";
 
-// ==========================================
+// Archivos
+const PROMPT_FILE = path.join(__dirname, "prompt.txt");
+const ESTADOS_FILE = path.join(__dirname, "estados.txt");
+
+// ======================================================
+// COMPROBAR VARIABLES
+// ======================================================
+
+if (!DISCORD_TOKEN) {
+    console.error("Falta DISCORD_TOKEN en las variables de entorno.");
+    process.exit(1);
+}
+
+if (!GROQ_API_KEY) {
+    console.error("Falta GROQ_API_KEY en las variables de entorno.");
+    process.exit(1);
+}
+
+if (!GITHUB_TOKEN) {
+    console.error("Falta GITHUB_TOKEN en las variables de entorno.");
+    process.exit(1);
+}
+
+// ======================================================
 // CLIENTE DISCORD
-// ==========================================
+// ======================================================
 
 const client = new Client({
     intents: [
@@ -61,770 +65,814 @@ const client = new Client({
     ]
 });
 
-// ==========================================
-// GROQ
-// ==========================================
-
 const groq = new Groq({
     apiKey: GROQ_API_KEY
 });
 
-// ==========================================
-// PROMPT
-// ==========================================
+// ======================================================
+// EXPRESS PARA RENDER
+// ======================================================
 
-let prompt;
+const app = express();
 
-try {
-    prompt = fs.readFileSync(
-        "prompt.txt",
-        "utf8"
-    );
-} catch (error) {
-    console.error(
-        "No se pudo cargar prompt.txt:",
-        error
-    );
+app.get("/", (req, res) => {
+    res.send("Baba Chops está despierta.");
+});
 
-    process.exit(1);
-}
+app.get("/health", (req, res) => {
+    res.json({
+        status: "ok",
+        bot: client.user ? client.user.tag : "iniciando"
+    });
+});
 
-// ==========================================
-// ESTADOS
-// ==========================================
+const PORT = process.env.PORT || 3000;
 
-let estados = [];
+app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Servidor web activo en el puerto ${PORT}`);
+});
 
-try {
-    estados = fs.readFileSync(
-        "estados.txt",
-        "utf8"
-    )
-    .split("\n")
-    .map(estado => estado.trim())
-    .filter(estado => estado.length > 0);
+// ======================================================
+// ARCHIVOS LOCALES
+// ======================================================
 
-    console.log(
-        `${estados.length} estados cargados.`
-    );
-
-} catch (error) {
-
-    console.error(
-        "No se pudo cargar estados.txt:",
-        error
-    );
-
-    process.exit(1);
-}
-
-let ultimoEstado = -1;
-
-function obtenerEstado() {
-
-    if (estados.length === 0) {
+function cargarPrompt() {
+    try {
+        return fs.readFileSync(PROMPT_FILE, "utf8").trim();
+    } catch (error) {
+        console.error("No se pudo cargar prompt.txt.");
         return "";
     }
-
-    if (estados.length === 1) {
-        return estados[0];
-    }
-
-    let nuevoEstado;
-
-    do {
-        nuevoEstado =
-            Math.floor(
-                Math.random() * estados.length
-            );
-    } while (
-        nuevoEstado === ultimoEstado
-    );
-
-    ultimoEstado = nuevoEstado;
-
-    return estados[nuevoEstado];
 }
 
-// ==========================================
-// CONFIGURACIÓN GUARDADA
-// ==========================================
+function cargarEstados() {
+    try {
+        return fs
+            .readFileSync(ESTADOS_FILE, "utf8")
+            .split("\n")
+            .map(estado => estado.trim())
+            .filter(Boolean);
+    } catch (error) {
+        console.error("No se pudo cargar estados.txt.");
+        return [];
+    }
+}
 
-let config = {
+const SYSTEM_PROMPT = cargarPrompt();
+const estados = cargarEstados();
+
+// ======================================================
+// CONFIGURACIÓN
+// ======================================================
+
+let configuracion = {
     canales: {},
     mutes: {}
 };
 
-let conversaciones = {};
-
-// ==========================================
+// ======================================================
 // GITHUB
-// ==========================================
+// ======================================================
 
-function githubRequest(method, path, data = null) {
-
+function githubRequest(method, endpoint, body = null) {
     return new Promise((resolve, reject) => {
-
-        const body = data
-            ? JSON.stringify(data)
-            : null;
+        const data = body ? JSON.stringify(body) : null;
 
         const options = {
             hostname: "api.github.com",
-            path,
-            method,
+            path: endpoint,
+            method: method,
 
             headers: {
                 "User-Agent": "Baba-Chops",
-
-                "Authorization":
-                    `Bearer ${GITHUB_TOKEN}`,
-
-                "Accept":
-                    "application/vnd.github+json",
-
-                "X-GitHub-Api-Version":
-                    "2022-11-28"
+                "Authorization": `Bearer ${GITHUB_TOKEN}`,
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28"
             }
         };
 
-        if (body) {
-            options.headers["Content-Type"] =
-                "application/json";
+        if (data) {
+            options.headers["Content-Type"] = "application/json";
+            options.headers["Content-Length"] =
+                Buffer.byteLength(data);
         }
 
-        const request = https.request(
-            options,
-            response => {
+        const req = https.request(options, res => {
+            let respuesta = "";
 
-                let result = "";
+            res.on("data", chunk => {
+                respuesta += chunk;
+            });
 
-                response.on(
-                    "data",
-                    chunk => {
-                        result += chunk;
-                    }
-                );
+            res.on("end", () => {
+                let json;
 
-                response.on(
-                    "end",
-                    () => {
+                try {
+                    json = respuesta
+                        ? JSON.parse(respuesta)
+                        : null;
+                } catch {
+                    json = respuesta;
+                }
 
-                        let json = {};
+                if (
+                    res.statusCode >= 200 &&
+                    res.statusCode < 300
+                ) {
+                    resolve(json);
+                } else {
+                    reject(
+                        new Error(
+                            `GitHub respondió ${res.statusCode}: ${respuesta}`
+                        )
+                    );
+                }
+            });
+        });
 
-                        try {
-                            json = result
-                                ? JSON.parse(result)
-                                : {};
-                        } catch {}
+        req.on("error", reject);
 
-                        resolve({
-                            status: response.statusCode,
-                            data: json
-                        });
-                    }
-                );
-            }
-        );
-
-        request.on(
-            "error",
-            reject
-        );
-
-        if (body) {
-            request.write(body);
+        if (data) {
+            req.write(data);
         }
 
-        request.end();
+        req.end();
     });
 }
 
-// ==========================================
-// CARGAR CONFIGURACIÓN
-// ==========================================
-
-async function cargarDatos() {
-
+async function cargarConfiguracionGitHub() {
     try {
+        const archivo = await githubRequest(
+            "GET",
+            `/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_FILE}?ref=${GITHUB_BRANCH}`
+        );
 
-        const resultado =
-            await githubRequest(
-                "GET",
-                `/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_FILE}?ref=${GITHUB_BRANCH}`
-            );
+        const contenido = Buffer.from(
+            archivo.content.replace(/\n/g, ""),
+            "base64"
+        ).toString("utf8");
 
-        if (resultado.status === 404) {
+        configuracion = JSON.parse(contenido);
 
-            console.log(
-                "No existe configuración guardada."
-            );
-
-            return;
+        if (!configuracion.canales) {
+            configuracion.canales = {};
         }
 
-        if (resultado.status !== 200) {
-
-            console.error(
-                "Error leyendo GitHub:",
-                resultado.data
-            );
-
-            return;
+        if (!configuracion.mutes) {
+            configuracion.mutes = {};
         }
-
-        const contenido =
-            Buffer.from(
-                resultado.data.content.replace(
-                    /\n/g,
-                    ""
-                ),
-                "base64"
-            ).toString("utf8");
-
-        config =
-            JSON.parse(contenido);
 
         console.log(
             "Configuración cargada desde GitHub."
         );
 
     } catch (error) {
-
-        console.error(
-            "Error cargando configuración:",
-            error
+        console.log(
+            "No se pudo cargar la configuración desde GitHub."
         );
+
+        console.log(
+            "Se utilizará una configuración nueva."
+        );
+
+        configuracion = {
+            canales: {},
+            mutes: {}
+        };
     }
 }
 
-// ==========================================
-// GUARDAR CONFIGURACIÓN
-// ==========================================
+async function guardarConfiguracionGitHub() {
+    try {
+        let sha = null;
 
-async function guardarDatos() {
+        try {
+            const archivo = await githubRequest(
+                "GET",
+                `/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_FILE}?ref=${GITHUB_BRANCH}`
+            );
+
+            sha = archivo.sha;
+
+        } catch {
+            // El archivo todavía no existe.
+        }
+
+        const contenido = JSON.stringify(
+            configuracion,
+            null,
+            2
+        );
+
+        const body = {
+            message: "Actualizar configuración de Baba Chops",
+            content: Buffer.from(contenido).toString("base64"),
+            branch: GITHUB_BRANCH
+        };
+
+        if (sha) {
+            body.sha = sha;
+        }
+
+        await githubRequest(
+            "PUT",
+            `/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_FILE}`,
+            body
+        );
+
+        console.log(
+            "Configuración guardada en GitHub."
+        );
+
+    } catch (error) {
+        console.error(
+            "Error guardando configuración en GitHub:"
+        );
+
+        console.error(error.message);
+    }
+}
+
+// ======================================================
+// HISTORIAL
+// ======================================================
+
+const conversaciones = new Map();
+
+function obtenerHistorial(guildId) {
+    if (!conversaciones.has(guildId)) {
+        conversaciones.set(guildId, []);
+    }
+
+    return conversaciones.get(guildId);
+}
+
+function agregarMensaje(guildId, role, content) {
+    const historial =
+        obtenerHistorial(guildId);
+
+    historial.push({
+        role: role,
+        content: content
+    });
+
+    // Máximo 20 mensajes.
+    // Equivale a aproximadamente 10 intercambios.
+    while (historial.length > 20) {
+        historial.shift();
+    }
+}
+
+// ======================================================
+// ESTADOS DEL PERFIL
+// ======================================================
+
+let ultimoEstado = null;
+
+function cambiarEstado() {
+    if (!client.user) {
+        return;
+    }
+
+    if (estados.length === 0) {
+        return;
+    }
+
+    let estado;
+
+    if (estados.length === 1) {
+        estado = estados[0];
+
+    } else {
+        do {
+            estado =
+                estados[
+                    Math.floor(
+                        Math.random() * estados.length
+                    )
+                ];
+
+        } while (estado === ultimoEstado);
+    }
+
+    ultimoEstado = estado;
+
+    client.user.setPresence({
+        activities: [
+            {
+                name: estado,
+                type: 0
+            }
+        ],
+
+        status: "online"
+    });
+
+    console.log(`Estado cambiado: ${estado}`);
+}
+
+// ======================================================
+// PERMISOS
+// ======================================================
+
+function esCreador(member) {
+    if (!member || !member.user) {
+        return false;
+    }
+
+    return (
+        member.user.username.toLowerCase() ===
+        CREADOR.toLowerCase()
+    );
+}
+
+function esAdministrador(member) {
+    if (!member) {
+        return false;
+    }
+
+    return member.permissions.has(
+        PermissionsBitField.Flags.Administrator
+    );
+}
+
+function tienePermisoModeracion(member) {
+    return (
+        esCreador(member) ||
+        esAdministrador(member)
+    );
+}
+
+function estaMuteado(guildId, userId) {
+    return (
+        configuracion.mutes[guildId]?.includes(userId) ||
+        false
+    );
+}
+
+function obtenerCanalPermitido(guildId) {
+    return configuracion.canales[guildId] || null;
+}
+
+// ======================================================
+// BOT LISTO
+// ======================================================
+
+client.once("ready", async () => {
+    console.log("--------------------------------");
+    console.log("BABA CHOPS");
+    console.log("--------------------------------");
+
+    console.log(
+        `Conectada como ${client.user.tag}`
+    );
+
+    console.log(
+        `Servidores: ${client.guilds.cache.size}`
+    );
+
+    await cargarConfiguracionGitHub();
+
+    // Primer estado
+    cambiarEstado();
+
+    // Cambiar estado cada minuto
+    setInterval(() => {
+        cambiarEstado();
+    }, 60000);
+
+    console.log(
+        "Baba Chops está lista."
+    );
+});
+
+// ======================================================
+// ENTRAR A UN SERVIDOR
+// ======================================================
+
+client.on("guildCreate", async guild => {
+    console.log(
+        `Entré al servidor: ${guild.name}`
+    );
+
+    const canal = guild.channels.cache.find(
+        canal =>
+            canal.isTextBased() &&
+            canal
+                .permissionsFor(guild.members.me)
+                ?.has(
+                    PermissionsBitField.Flags.SendMessages
+                )
+    );
+
+    if (!canal) {
+        return;
+    }
+
+    try {
+        await canal.send(
+            "Baba Chops ha llegado.\n\n" +
+            "Usa `b!help` para ver los comandos."
+        );
+
+    } catch (error) {
+        console.error(
+            "No pude enviar el mensaje de bienvenida."
+        );
+    }
+});
+
+// ======================================================
+// MENSAJES
+// ======================================================
+
+client.on("messageCreate", async message => {
+    if (message.author.bot) {
+        return;
+    }
+
+    if (!message.guild) {
+        return;
+    }
+
+    const contenido =
+        message.content.trim();
+
+    // Debe comenzar con b!
+    if (
+        !contenido
+            .toLowerCase()
+            .startsWith(
+                PREFIJO.toLowerCase()
+            )
+    ) {
+        return;
+    }
+
+    const despuesDelPrefijo =
+        contenido
+            .slice(PREFIJO.length)
+            .trim();
+
+    // ==================================================
+    // b! SIN TEXTO
+    // ==================================================
+
+    if (!despuesDelPrefijo) {
+        await message.reply(
+            "¿Qué quieres decirme?"
+        );
+
+        return;
+    }
+
+    const partes =
+        despuesDelPrefijo.split(/\s+/);
+
+    const comando =
+        (partes.shift() || "").toLowerCase();
+
+    const argumentos = partes;
+
+    // ==================================================
+    // HELP
+    // ==================================================
+
+    if (comando === "help") {
+        const ayuda =
+            "**Baba Chops — Ayuda**\n\n" +
+
+            "`b! <mensaje>` — Hablar con Baba Chops.\n" +
+
+            "`b!help` — Mostrar esta ayuda.\n" +
+
+            "`b!mute @usuario` — Silenciar a un usuario.\n" +
+
+            "`b!unmute @usuario` — Quitar el silencio.\n" +
+
+            "`b!canal #canal` — Establecer el canal de Baba Chops.\n" +
+
+            "`b!canal reset` — Quitar el canal obligatorio.\n" +
+
+            "`b!unirse` — Mostrar el enlace para invitar a Baba Chops.\n\n" +
+
+            "Los comandos de moderación requieren permisos de administrador.";
+
+        await message.reply(ayuda);
+
+        return;
+    }
+
+    // ==================================================
+    // MUTE
+    // ==================================================
+
+    if (comando === "mute") {
+
+        if (
+            !tienePermisoModeracion(
+                message.member
+            )
+        ) {
+            await message.reply(
+                "No tienes permiso para hacer eso."
+            );
+
+            return;
+        }
+
+        const usuario =
+            message.mentions.users.first();
+
+        if (!usuario) {
+            await message.reply(
+                "Menciona al usuario que quieres silenciar."
+            );
+
+            return;
+        }
+
+        if (
+            !configuracion.mutes[
+                message.guild.id
+            ]
+        ) {
+            configuracion.mutes[
+                message.guild.id
+            ] = [];
+        }
+
+        if (
+            !configuracion.mutes[
+                message.guild.id
+            ].includes(usuario.id)
+        ) {
+            configuracion.mutes[
+                message.guild.id
+            ].push(usuario.id);
+        }
+
+        await guardarConfiguracionGitHub();
+
+        await message.reply(
+            `${usuario} ha sido silenciado para Baba Chops.`
+        );
+
+        return;
+    }
+
+    // ==================================================
+    // UNMUTE
+    // ==================================================
+
+    if (comando === "unmute") {
+
+        if (
+            !tienePermisoModeracion(
+                message.member
+            )
+        ) {
+            await message.reply(
+                "No tienes permiso para hacer eso."
+            );
+
+            return;
+        }
+
+        const usuario =
+            message.mentions.users.first();
+
+        if (!usuario) {
+            await message.reply(
+                "Menciona al usuario al que quieres quitarle el silencio."
+            );
+
+            return;
+        }
+
+        if (
+            configuracion.mutes[
+                message.guild.id
+            ]
+        ) {
+            configuracion.mutes[
+                message.guild.id
+            ] =
+                configuracion.mutes[
+                    message.guild.id
+                ].filter(
+                    id => id !== usuario.id
+                );
+        }
+
+        await guardarConfiguracionGitHub();
+
+        await message.reply(
+            `${usuario} ya puede hablar con Baba Chops.`
+        );
+
+        return;
+    }
+
+    // ==================================================
+    // CANAL
+    // ==================================================
+
+    if (comando === "canal") {
+
+        if (
+            !tienePermisoModeracion(
+                message.member
+            )
+        ) {
+            await message.reply(
+                "No tienes permiso para configurar el canal."
+            );
+
+            return;
+        }
+
+        if (
+            argumentos[0] &&
+            argumentos[0].toLowerCase() ===
+                "reset"
+        ) {
+
+            delete configuracion.canales[
+                message.guild.id
+            ];
+
+            await guardarConfiguracionGitHub();
+
+            await message.reply(
+                "El canal obligatorio de Baba Chops ha sido eliminado."
+            );
+
+            return;
+        }
+
+        const canal =
+            message.mentions.channels.first();
+
+        if (!canal) {
+            await message.reply(
+                "Menciona un canal. Ejemplo: `b!canal #general`"
+            );
+
+            return;
+        }
+
+        configuracion.canales[
+            message.guild.id
+        ] = canal.id;
+
+        await guardarConfiguracionGitHub();
+
+        await message.reply(
+            `Baba Chops ahora responderá únicamente en ${canal}.`
+        );
+
+        return;
+    }
+
+    // ==================================================
+    // UNIRSE
+    // ==================================================
+
+    if (comando === "unirse") {
+
+        const enlace =
+            "https://discord.com/oauth2/authorize" +
+            "?client_id=1551275220621463734" +
+            "&scope=bot%20applications.commands" +
+            "&permissions=8";
+
+        await message.reply(
+            `Puedes invitarme aquí:\n${enlace}`
+        );
+
+        return;
+    }
+
+    // ==================================================
+    // MUTE
+    // ==================================================
+
+    if (
+        estaMuteado(
+            message.guild.id,
+            message.author.id
+        )
+    ) {
+        return;
+    }
+
+    // ==================================================
+    // CANAL OBLIGATORIO
+    // ==================================================
+
+    const canalPermitido =
+        obtenerCanalPermitido(
+            message.guild.id
+        );
+
+    if (
+        canalPermitido &&
+        message.channel.id !== canalPermitido
+    ) {
+        return;
+    }
+
+    // ==================================================
+    // IA
+    // ==================================================
 
     try {
 
-        const path =
-            `/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_FILE}`;
+        await message.channel.sendTyping();
 
-        const actual =
-            await githubRequest(
-                "GET",
-                `${path}?ref=${GITHUB_BRANCH}`
+        const historial =
+            obtenerHistorial(
+                message.guild.id
             );
 
-        const contenido =
-            JSON.stringify(
-                config,
-                null,
-                2
+        const mensajeUsuario =
+            message.content
+                .slice(PREFIJO.length)
+                .trim();
+
+        agregarMensaje(
+            message.guild.id,
+            "user",
+            mensajeUsuario
+        );
+
+        const respuesta =
+            await groq.chat.completions.create({
+
+                model: MODELO,
+
+                messages: [
+                    {
+                        role: "system",
+                        content: SYSTEM_PROMPT
+                    },
+
+                    ...historial
+                ],
+
+                temperature: 0.9,
+
+                max_tokens: 500
+            });
+
+        const texto =
+            respuesta
+                .choices?.[0]
+                ?.message
+                ?.content
+                ?.trim();
+
+        if (!texto) {
+            await message.reply(
+                "No tengo nada que decir."
             );
 
-        const encoded =
-            Buffer.from(
-                contenido,
-                "utf8"
-            ).toString("base64");
-
-        const datos = {
-            message:
-                "Actualizar configuración de Baba Chops",
-
-            content:
-                encoded,
-
-            branch:
-                GITHUB_BRANCH
-        };
-
-        if (
-            actual.status === 200 &&
-            actual.data.sha
-        ) {
-            datos.sha =
-                actual.data.sha;
+            return;
         }
 
-        const resultado =
-            await githubRequest(
-                "PUT",
-                path,
-                datos
-            );
+        agregarMensaje(
+            message.guild.id,
+            "assistant",
+            texto
+        );
 
-        if (
-            resultado.status === 200 ||
-            resultado.status === 201
-        ) {
-
-            console.log(
-                "Configuración guardada."
-            );
-
-        } else {
-
-            console.error(
-                "Error guardando:",
-                resultado.data
-            );
-        }
+        await message.reply(texto);
 
     } catch (error) {
 
         console.error(
-            "Error guardando datos:",
-            error
+            "Error con Groq:"
+        );
+
+        console.error(error);
+
+        await message.reply(
+            "Algo salió mal. Inténtalo otra vez."
         );
     }
-}
-
-// ==========================================
-// SERVIDOR WEB
-// ==========================================
-
-const app = express();
-
-app.get("/", (req, res) => {
-    res.send(
-        "Baba Chops está funcionando."
-    );
 });
 
-app.get("/health", (req, res) => {
-    res.status(200).send("OK");
-});
-
-app.listen(
-    process.env.PORT || 3000,
-    "0.0.0.0",
-    () => {
-        console.log(
-            "Servidor web iniciado."
-        );
-    }
-);
-
-// ==========================================
-// BOT LISTO
-// ==========================================
-
-client.once(
-    "ready",
-    () => {
-
-        console.log(
-            `Baba Chops conectado como ${client.user.tag}`
-        );
-
-        console.log(
-            `Servidores: ${client.guilds.cache.size}`
-        );
-    }
-);
-
-// ==========================================
-// ENTRAR A SERVIDOR
-// ==========================================
-
-client.on(
-    "guildCreate",
-    async guild => {
-
-        console.log(
-            `Baba Chops entró a ${guild.name}`
-        );
-
-        const canal =
-            guild.channels.cache.find(
-                channel =>
-                    channel.isTextBased() &&
-                    channel
-                        .permissionsFor(
-                            guild.members.me
-                        )
-                        ?.has(
-                            PermissionsBitField.Flags.SendMessages
-                        )
-            );
-
-        if (!canal) {
-            return;
-        }
-
-        try {
-
-            await canal.send(
-                "¡Hola! Soy Baba Chops.\n" +
-                "Usa `b!babachops` para hablar conmigo."
-            );
-
-        } catch {}
-    }
-);
-
-// ==========================================
-// MENSAJES
-// ==========================================
-
-client.on(
-    "messageCreate",
-    async message => {
-
-        if (message.author.bot) {
-            return;
-        }
-
-        if (!message.guild) {
-            return;
-        }
-
-        const texto =
-            message.content.trim();
-
-        const textoMinusculas =
-            texto.toLowerCase();
-
-        // ======================================
-        // ESTADO ROTATIVO
-        // ======================================
-
-        if (
-            textoMinusculas ===
-            `${PREFIJO}estado`
-        ) {
-
-            await message.reply(
-                obtenerEstado()
-            );
-
-            return;
-        }
-
-        // ======================================
-        // !UNIRSE
-        // ======================================
-
-        if (
-            textoMinusculas ===
-            `${PREFIJO}unirse`
-        ) {
-
-            await message.reply(
-                "Ya estoy aquí."
-            );
-
-            return;
-        }
-
-        // ======================================
-        // MUTE
-        // ======================================
-
-        if (
-            textoMinusculas ===
-            `${PREFIJO}mute`
-        ) {
-
-            if (
-                !message.member.permissions.has(
-                    PermissionsBitField.Flags.Administrator
-                ) &&
-                message.author.username.toLowerCase() !==
-                CREATOR.toLowerCase()
-            ) {
-                return;
-            }
-
-            config.mutes[
-                message.guild.id
-            ] = true;
-
-            await guardarDatos();
-
-            await message.reply(
-                "Baba Chops ha sido silenciada."
-            );
-
-            return;
-        }
-
-        // ======================================
-        // UNMUTE
-        // ======================================
-
-        if (
-            textoMinusculas ===
-            `${PREFIJO}unmute`
-        ) {
-
-            if (
-                !message.member.permissions.has(
-                    PermissionsBitField.Flags.Administrator
-                ) &&
-                message.author.username.toLowerCase() !==
-                CREATOR.toLowerCase()
-            ) {
-                return;
-            }
-
-            delete config.mutes[
-                message.guild.id
-            ];
-
-            await guardarDatos();
-
-            await message.reply(
-                "Baba Chops vuelve a estar activa."
-            );
-
-            return;
-        }
-
-        // ======================================
-        // CANAL
-        // ======================================
-
-        if (
-            textoMinusculas.startsWith(
-                `${PREFIJO}canal`
-            )
-        ) {
-
-            if (
-                !message.member.permissions.has(
-                    PermissionsBitField.Flags.Administrator
-                ) &&
-                message.author.username.toLowerCase() !==
-                CREATOR.toLowerCase()
-            ) {
-                return;
-            }
-
-            const guild =
-                message.guild.id;
-
-            const argumento =
-                texto
-                    .slice(
-                        `${PREFIJO}canal`.length
-                    )
-                    .trim();
-
-            if (
-                argumento.toLowerCase() ===
-                "reset"
-            ) {
-
-                delete config.canales[guild];
-
-                await guardarDatos();
-
-                await message.reply(
-                    "Canales reiniciados."
-                );
-
-                return;
-            }
-
-            const canales =
-                [
-                    ...message.mentions.channels.values()
-                ];
-
-            if (!canales.length) {
-
-                await message.reply(
-                    `Usa \`${PREFIJO}canal #canal\` o \`${PREFIJO}canal reset\`.`
-                );
-
-                return;
-            }
-
-            config.canales[guild] =
-                canales.map(
-                    canal => canal.id
-                );
-
-            await guardarDatos();
-
-            await message.reply(
-                "Canales configurados."
-            );
-
-            return;
-        }
-
-        // ======================================
-        // APAGAR
-        // ======================================
-
-        if (
-            textoMinusculas ===
-            `${PREFIJO}apagar`
-        ) {
-
-            if (
-                message.author.username.toLowerCase() !==
-                CREATOR.toLowerCase()
-            ) {
-                return;
-            }
-
-            await guardarDatos();
-
-            await message.reply(
-                "Apagando Baba Chops..."
-            );
-
-            process.exit(0);
-        }
-
-        // ======================================
-        // BABACHOPS
-        // ======================================
-
-        if (
-            !textoMinusculas.startsWith(
-                `${PREFIJO}babachops`
-            )
-        ) {
-            return;
-        }
-
-        const guild =
-            message.guild.id;
-
-        if (config.mutes[guild]) {
-            return;
-        }
-
-        if (
-            config.canales[guild] &&
-            !config.canales[guild].includes(
-                message.channel.id
-            )
-        ) {
-            return;
-        }
-
-        const pregunta =
-            texto
-                .slice(
-                    `${PREFIJO}babachops`.length
-                )
-                .trim();
-
-        if (!pregunta) {
-
-            await message.reply(
-                "¿Qué quieres decirme?"
-            );
-
-            return;
-        }
-
-        // ======================================
-        // MEMORIA
-        // ======================================
-
-        if (!conversaciones[guild]) {
-            conversaciones[guild] = [];
-        }
-
-        conversaciones[guild].push({
-            role: "user",
-            content: pregunta
-        });
-
-        while (
-            conversaciones[guild].length > 20
-        ) {
-            conversaciones[guild].shift();
-        }
-
-        // ======================================
-        // GROQ
-        // ======================================
-
-        try {
-
-            await message.channel.sendTyping();
-
-            const respuesta =
-                await groq.chat.completions.create({
-
-                    model: MODEL,
-
-                    messages: [
-                        {
-                            role: "system",
-                            content: prompt
-                        },
-
-                        ...conversaciones[guild]
-                    ]
-                });
-
-            const resultado =
-                respuesta
-                    .choices?.[0]
-                    ?.message
-                    ?.content;
-
-            if (!resultado) {
-                return;
-            }
-
-            conversaciones[guild].push({
-                role: "assistant",
-                content: resultado
-            });
-
-            while (
-                conversaciones[guild].length > 20
-            ) {
-                conversaciones[guild].shift();
-            }
-
-            await message.reply(
-                resultado
-            );
-
-        } catch (error) {
-
-            console.error(
-                "Error de Groq:",
-                error
-            );
-
-            await message.reply(
-                "Tuve un problema al responder."
-            );
-        }
-    }
-);
-
-// ==========================================
+// ======================================================
 // GUARDADO AUTOMÁTICO
-// ==========================================
+// ======================================================
 
-setInterval(
-    guardarDatos,
-    30000
-);
+setInterval(async () => {
+    await guardarConfiguracionGitHub();
+}, 30000);
 
-// ==========================================
-// INICIO
-// ==========================================
+// ======================================================
+// INICIAR
+// ======================================================
 
-(async () => {
-
-    await cargarDatos();
-
-    await client.login(
-        DISCORD_TOKEN
-    );
-
-})();
+client.login(DISCORD_TOKEN);
