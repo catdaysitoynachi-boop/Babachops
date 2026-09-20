@@ -20,25 +20,27 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 
 if (!DISCORD_TOKEN) {
-    console.error("Falta DISCORD_TOKEN en Render.");
+    console.error("Falta DISCORD_TOKEN.");
     process.exit(1);
 }
 
 if (!GROQ_API_KEY) {
-    console.error("Falta GROQ_API_KEY en Render.");
+    console.error("Falta GROQ_API_KEY.");
     process.exit(1);
 }
 
 if (!GITHUB_TOKEN) {
-    console.error("Falta GITHUB_TOKEN en Render.");
+    console.error("Falta GITHUB_TOKEN.");
     process.exit(1);
 }
 
 // ==========================================
-// CONFIGURACIÓN DE BABA CHOPS
+// CONFIGURACIÓN
 // ==========================================
 
-const CREATOR = "catdaysito_y_nachi";
+const PREFIJO = "b!";
+
+const CREATOR = "dogdaycatnapxdsmc";
 
 const GITHUB_OWNER = "catdaysitoynachi-boop";
 const GITHUB_REPO = "Babachops";
@@ -48,7 +50,7 @@ const GITHUB_BRANCH = "main";
 const MODEL = "openai/gpt-oss-20b";
 
 // ==========================================
-// DISCORD
+// CLIENTE DISCORD
 // ==========================================
 
 const client = new Client({
@@ -88,7 +90,64 @@ try {
 }
 
 // ==========================================
-// CONFIGURACIÓN
+// ESTADOS
+// ==========================================
+
+let estados = [];
+
+try {
+    estados = fs.readFileSync(
+        "estados.txt",
+        "utf8"
+    )
+    .split("\n")
+    .map(estado => estado.trim())
+    .filter(estado => estado.length > 0);
+
+    console.log(
+        `${estados.length} estados cargados.`
+    );
+
+} catch (error) {
+
+    console.error(
+        "No se pudo cargar estados.txt:",
+        error
+    );
+
+    process.exit(1);
+}
+
+let ultimoEstado = -1;
+
+function obtenerEstado() {
+
+    if (estados.length === 0) {
+        return "";
+    }
+
+    if (estados.length === 1) {
+        return estados[0];
+    }
+
+    let nuevoEstado;
+
+    do {
+        nuevoEstado =
+            Math.floor(
+                Math.random() * estados.length
+            );
+    } while (
+        nuevoEstado === ultimoEstado
+    );
+
+    ultimoEstado = nuevoEstado;
+
+    return estados[nuevoEstado];
+}
+
+// ==========================================
+// CONFIGURACIÓN GUARDADA
 // ==========================================
 
 let config = {
@@ -112,9 +171,7 @@ function githubRequest(method, path, data = null) {
 
         const options = {
             hostname: "api.github.com",
-
             path,
-
             method,
 
             headers: {
@@ -200,7 +257,7 @@ async function cargarDatos() {
         if (resultado.status === 404) {
 
             console.log(
-                "No existe configuración en GitHub. Se creará una nueva."
+                "No existe configuración guardada."
             );
 
             return;
@@ -303,13 +360,13 @@ async function guardarDatos() {
         ) {
 
             console.log(
-                "Configuración guardada en GitHub."
+                "Configuración guardada."
             );
 
         } else {
 
             console.error(
-                "Error guardando en GitHub:",
+                "Error guardando:",
                 resultado.data
             );
         }
@@ -324,7 +381,7 @@ async function guardarDatos() {
 }
 
 // ==========================================
-// SERVIDOR WEB PARA RENDER
+// SERVIDOR WEB
 // ==========================================
 
 const app = express();
@@ -368,7 +425,7 @@ client.once(
 );
 
 // ==========================================
-// ENTRAR A UN SERVIDOR
+// ENTRAR A SERVIDOR
 // ==========================================
 
 client.on(
@@ -400,8 +457,7 @@ client.on(
 
             await canal.send(
                 "¡Hola! Soy Baba Chops.\n" +
-                "Hello! I'm Baba Chops.\n\n" +
-                "Usa `!babachops` para hablar conmigo."
+                "Usa `b!babachops` para hablar conmigo."
             );
 
         } catch {}
@@ -427,30 +483,56 @@ client.on(
         const texto =
             message.content.trim();
 
+        const textoMinusculas =
+            texto.toLowerCase();
+
         // ======================================
-        // !UNIRSE
+        // ESTADO ROTATIVO
         // ======================================
 
-        if (texto === "!unirse") {
+        if (
+            textoMinusculas ===
+            `${PREFIJO}estado`
+        ) {
 
             await message.reply(
-                "¡Ya estoy aquí! / I'm already here!"
+                obtenerEstado()
             );
 
             return;
         }
 
         // ======================================
-        // !MUTE
+        // !UNIRSE
         // ======================================
 
-        if (texto === "!mute") {
+        if (
+            textoMinusculas ===
+            `${PREFIJO}unirse`
+        ) {
+
+            await message.reply(
+                "Ya estoy aquí."
+            );
+
+            return;
+        }
+
+        // ======================================
+        // MUTE
+        // ======================================
+
+        if (
+            textoMinusculas ===
+            `${PREFIJO}mute`
+        ) {
 
             if (
                 !message.member.permissions.has(
                     PermissionsBitField.Flags.Administrator
                 ) &&
-                message.author.username !== CREATOR
+                message.author.username.toLowerCase() !==
+                CREATOR.toLowerCase()
             ) {
                 return;
             }
@@ -469,16 +551,20 @@ client.on(
         }
 
         // ======================================
-        // !UNMUTE
+        // UNMUTE
         // ======================================
 
-        if (texto === "!unmute") {
+        if (
+            textoMinusculas ===
+            `${PREFIJO}unmute`
+        ) {
 
             if (
                 !message.member.permissions.has(
                     PermissionsBitField.Flags.Administrator
                 ) &&
-                message.author.username !== CREATOR
+                message.author.username.toLowerCase() !==
+                CREATOR.toLowerCase()
             ) {
                 return;
             }
@@ -497,18 +583,21 @@ client.on(
         }
 
         // ======================================
-        // !CANAL
+        // CANAL
         // ======================================
 
         if (
-            texto.startsWith("!canal")
+            textoMinusculas.startsWith(
+                `${PREFIJO}canal`
+            )
         ) {
 
             if (
                 !message.member.permissions.has(
                     PermissionsBitField.Flags.Administrator
                 ) &&
-                message.author.username !== CREATOR
+                message.author.username.toLowerCase() !==
+                CREATOR.toLowerCase()
             ) {
                 return;
             }
@@ -518,7 +607,9 @@ client.on(
 
             const argumento =
                 texto
-                    .slice(6)
+                    .slice(
+                        `${PREFIJO}canal`.length
+                    )
                     .trim();
 
             if (
@@ -545,7 +636,7 @@ client.on(
             if (!canales.length) {
 
                 await message.reply(
-                    "Usa `!canal #canal` o `!canal reset`."
+                    `Usa \`${PREFIJO}canal #canal\` o \`${PREFIJO}canal reset\`.`
                 );
 
                 return;
@@ -566,16 +657,17 @@ client.on(
         }
 
         // ======================================
-        // !APAGAR
+        // APAGAR
         // ======================================
 
         if (
-            texto === "!apagar"
+            textoMinusculas ===
+            `${PREFIJO}apagar`
         ) {
 
             if (
-                message.author.username !==
-                CREATOR
+                message.author.username.toLowerCase() !==
+                CREATOR.toLowerCase()
             ) {
                 return;
             }
@@ -590,13 +682,13 @@ client.on(
         }
 
         // ======================================
-        // !BABACHOPS
+        // BABACHOPS
         // ======================================
 
         if (
-            !texto
-                .toLowerCase()
-                .startsWith("!babachops")
+            !textoMinusculas.startsWith(
+                `${PREFIJO}babachops`
+            )
         ) {
             return;
         }
@@ -619,7 +711,9 @@ client.on(
 
         const pregunta =
             texto
-                .slice("!babachops".length)
+                .slice(
+                    `${PREFIJO}babachops`.length
+                )
                 .trim();
 
         if (!pregunta) {
@@ -722,7 +816,7 @@ setInterval(
 );
 
 // ==========================================
-// INICIAR BABA CHOPS
+// INICIO
 // ==========================================
 
 (async () => {
