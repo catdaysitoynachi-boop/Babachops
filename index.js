@@ -610,32 +610,31 @@ function cambiarEstado() {
 }
 
 // ======================================================
-// 🔑 PERMISOS
+// USUARIOS AUTORIZADOS PARA CONFIGURAR A BABA
 // ======================================================
 
-function esCreador(
-    member
-) {
+const USUARIOS_AUTORIZADOS = [
+    "1288893396978765957",
+    "1381254756206645310"
+];
 
-    if (
-        !member ||
-        !member.user
-    ) {
+// ======================================================
+// PERMISOS
+// ======================================================
 
+function esCreador(member) {
+
+    if (!member || !member.user) {
         return false;
-
     }
 
     return (
-        member.user.username
-            .toLowerCase() ===
+        member.user.username.toLowerCase() ===
         CREADOR.toLowerCase()
     );
 }
 
-function esAdministrador(
-    member
-) {
+function esAdministrador(member) {
 
     if (!member) {
         return false;
@@ -646,14 +645,32 @@ function esAdministrador(
     );
 }
 
-function tienePermisoModeracion(
-    member
-) {
+function tienePermisoModeracion(member) {
 
-    return (
-        esCreador(member) ||
-        esAdministrador(member)
-    );
+    if (!member || !member.user) {
+        return false;
+    }
+
+    // El creador siempre puede
+    if (esCreador(member)) {
+        return true;
+    }
+
+    // Los administradores pueden
+    if (esAdministrador(member)) {
+        return true;
+    }
+
+    // Usuarios específicos autorizados
+    if (
+        USUARIOS_AUTORIZADOS.includes(
+            member.user.id
+        )
+    ) {
+        return true;
+    }
+
+    return false;
 }
 
 // ======================================================
