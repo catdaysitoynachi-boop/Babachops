@@ -79,13 +79,6 @@ app.get("/", (req, res) => {
     res.send("Baba Chops está despierta.");
 });
 
-app.get("/health", (req, res) => {
-    res.json({
-        status: "ok",
-        bot: client.user ? client.user.tag : "iniciando"
-    });
-});
-
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, "0.0.0.0", () => {
