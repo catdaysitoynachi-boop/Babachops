@@ -112,34 +112,22 @@ const groq = new Groq({
 });
 
 // ======================================================
-// 🌑 EXPRESS — RENDER
+// 🌐 KEEP ALIVE / SERVIDOR WEB
 // ======================================================
 
 const app = express();
 
+const PORT = process.env.PORT || 3000;
+
 app.get("/", (req, res) => {
-
-    res.send(
-        "Je, je, je... Baba Chops está despierta."
-    );
-
+    res.send("🐑 Baba Chops está despierta.");
 });
 
-const PORT =
-    process.env.PORT || 3000;
-
-app.listen(
-    PORT,
-    "0.0.0.0",
-    () => {
-
-        babaLog(
-            `Desperté en el puerto ${PORT}. ` +
-            "Qué lugar tan aburrido..."
-        );
-
-    }
-);
+app.listen(PORT, "0.0.0.0", () => {
+    console.log(
+        `🌐 Baba Chops: servidor web activo en el puerto ${PORT}.`
+    );
+});
 
 // ======================================================
 // 📜 CARGAR PROMPT
